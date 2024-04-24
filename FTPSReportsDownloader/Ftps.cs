@@ -21,6 +21,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Threading;
 
 using static Lib.Config;
 using static Lib.Logger;
@@ -65,6 +66,9 @@ namespace FTPSReportsDownloader
         /// <returns>Код возврата для программы.</returns>
         public static int Sync()
         {
+            const int retries = 5;
+            const int timeout = 1000;
+
             var downloadDirectory = GetValue("DownloadDirectory");
             var historyFile = GetValue("DownloadHistory")
                 ?? Path.Combine(downloadDirectory, Path.GetFileName(UpdateHistory));
@@ -107,9 +111,24 @@ namespace FTPSReportsDownloader
                 // Допстраховка от сбоев, когда возникает желание перезагрузить весь список от начала...
                 if (file[3] == '/' && string.Compare(file, 4, dateFrom, 0, 8) > 0)
                 {
-                    if (DownloadFile(file))
+                    for (int i = 0; i <= retries; i++)
                     {
-                        counter++;
+                        if (DownloadFile(file))
+                        {
+                            counter++;
+                            break;
+                        }
+
+                        if (i < retries)
+                        {
+                            Thread.Sleep(timeout);
+                            TWriteLine($"Попытка повторить {i+1}/{retries}...");
+                        }
+                        else
+                        {
+                            TWriteLine($"Не удалось загрузить {file}");
+                            //File.Delete(historyFile); //TODO revert back to reload next time
+                        }
                     }
                 }
             }
@@ -214,9 +233,10 @@ namespace FTPSReportsDownloader
         /// <returns>Выполнение завершено успешно (true/false).</returns>
         public static bool DownloadFile(string serverPath, string localPath = null, bool resume = false)
         {
+            var path = localPath ?? Path.Combine(DownloadDirectory, Path.GetFileName(serverPath));
+
             try
             {
-                var path = localPath ?? Path.Combine(DownloadDirectory, Path.GetFileName(serverPath));
                 FileMode mode = (File.Exists(path) && resume) ? FileMode.Append : FileMode.Create;
 
                 using (var writeStream = new FileStream(path, mode))
@@ -250,6 +270,14 @@ namespace FTPSReportsDownloader
                 }
 
                 TWriteLine("Download file Error: " + e.Message);
+
+                var file = new FileInfo(path);
+
+                if (file.Exists)
+                {
+                    file.Delete();
+                }
+
                 return false;
             }
         }
