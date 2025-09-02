@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Authors>Diev</Authors>
+    <Version>9.2025.902</Version>
+    <Description>Downloads all reports from a remote MOEX FTPS server to a local path.</Description>
+    <Copyright>Copyright © MOEX 2016, 2022-2025 Dmitrii Evdokimov</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <Company>diev</Company>
+    <SupportedOSPlatformVersion>8.0</SupportedOSPlatformVersion>
+    <NeutralLanguage>ru-RU</NeutralLanguage>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="9.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="FTPSReportsDownloader.config.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

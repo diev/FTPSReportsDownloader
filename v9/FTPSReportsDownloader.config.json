@@ -1,0 +1,15 @@
+{
+  "TargetName": "ftp://ftps.moex.com",
+  "DownloadDirectory": "temp",
+  "DownloadDays": 4,
+
+  "RemoteHistory": "/UpdateHistory.txt",
+  "LocalHistory": "logs\\UpdateHistory.txt",
+
+  "Logger": {
+    "FileNameFormat": "logs\\{0:yyyy-MM}\\{0:yyyy-MM-dd}.log",
+    "LineFormat": "{0:HH:mm:ss} {1}",
+    "LogToConsole": true,
+    "AutoFlush": true
+  }
+}
