@@ -13,6 +13,7 @@ configuration: Release
 init:
 - cmd: >-
     tzutil /s "Russian Standard Time"
+
     git config --global core.autocrlf input
 dotnet_csproj:
   patch: true
@@ -26,12 +27,19 @@ dotnet_csproj:
 install:
 - ps: >-
     $prj = v9\FTPSReportsDownloader.csproj
+
     $commitDateTime = [datetime]::Parse($env:APPVEYOR_REPO_COMMIT_TIMESTAMP)
+
     $env:BuildDate = $commitDateTime.ToString('yyyy-MM-dd')
+
     $xml = [Xml] (Get-Content $prj)
+
     $ver = [Version] ($xml.Project.PropertyGroup | ? {$_.Version}).Version
+
     $env:Version = ($ver.Substring(0, $ver.LastIndexOf(".") + 1)) + $env:APPVEYOR_BUILD_NUMBER
+
     Update-AppveyorBuild -Version "$env:Version"
+
     Write-Host "Building v$env:APPVEYOR_BUILD_VERSION"
 build_script:
 - cmd: build.cmd
