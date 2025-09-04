@@ -17,7 +17,7 @@ init:
     git config --global core.autocrlf input
 dotnet_csproj:
   patch: true
-  file: '**\*.csproj'
+  file: 'v9\*.csproj'
   version: '{version}'
   version_prefix: '{version}'
   package_version: '{version}'
@@ -26,7 +26,7 @@ dotnet_csproj:
   informational_version: '{version}'
 install:
 - ps: >-
-    $prj = v9\FTPSReportsDownloader.csproj
+    $prj = "v9\FTPSReportsDownloader.csproj"
 
     $commitDateTime = [datetime]::Parse($env:APPVEYOR_REPO_COMMIT_TIMESTAMP)
 
@@ -36,7 +36,7 @@ install:
 
     $ver = [Version] ($xml.Project.PropertyGroup | ? {$_.Version}).Version
 
-    $env:Version = ($ver.Substring(0, $ver.LastIndexOf(".") + 1)) + $env:APPVEYOR_BUILD_NUMBER
+    $env:Version = "$ver.$env:APPVEYOR_BUILD_NUMBER"
 
     Update-AppveyorBuild -Version "$env:Version"
 
