@@ -31,6 +31,7 @@ namespace FTPSReportsDownloader;
 public static class Ftps
 {
     private static readonly IConfiguration _config;
+    private static int _count = 0;
 
     /// <summary>
     /// Учетная запись в Credential Manager.
@@ -55,6 +56,7 @@ public static class Ftps
     static Ftps()
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance); // required for Logger in win-1251
+        //ServicePointManager.ServerCertificateValidationCallback = delegate { return true; }; //TODO obsolete
 
         _config = AppSettingsHelper.Config();
 
@@ -72,289 +74,221 @@ public static class Ftps
     /// <returns>Код возврата для программы.</returns>
     public static async Task<int> SyncAsync()
     {
-        const int retries = 5;
-        const int timeout = 1000;
-
-        string server = _config["RemoteHistory"] ?? "/UpdateHistory.txt";
-        string client = _config["LocalHistory"] ?? "UpdateHistory.txt";
-
-        Logger.FileNameFormat = _config["Logger:FileNameFormat"] ?? @"logs\{0:yyyy-MM}\{0:yyyy-MM-dd}.log";
-        Logger.LineFormat = _config["Logger:LineFormat"] ?? @"{0:HH:mm:ss} {1}";
-        Logger.LogToConsole = bool.Parse(_config["Logger:LogToConsole"] ?? "false");
-        Logger.AutoFlush = bool.Parse(_config["Logger:AutoFlush"] ?? "false");
-        Logger.Reset();
-
-        Directory.CreateDirectory(DownloadDirectory);
-
-        //ServicePointManager.ServerCertificateValidationCallback = delegate { return true; }; //TODO obsolete
-
-        int compare = CompareSizeOfFile(server, client);
-
-        if (compare == 0)
+        try
         {
-            Logger.Flush();
-            return 0;
-        }
+            Logger.FileNameFormat = _config["Logger:FileNameFormat"] ?? @"logs\{0:yyyy-MM}\{0:yyyy-MM-dd}.log";
+            Logger.LineFormat = _config["Logger:LineFormat"] ?? @"{0:HH:mm:ss} {1}";
+            Logger.LogToConsole = bool.Parse(_config["Logger:LogToConsole"] ?? "false");
+            Logger.AutoFlush = bool.Parse(_config["Logger:AutoFlush"] ?? "false");
+            Logger.Reset();
 
-        string[] list;
+            Directory.CreateDirectory(DownloadDirectory);
 
-        if (compare > 0)
-        {
-            list = await GetDiffAsync(server, client); //TODO Diff!
-        }
-        else if (await DownloadFileAsync(server, client))
-        {
-            list = await File.ReadAllLinesAsync(client);
-            Logger.TimeLine($"Перезагрузка за последние {DownloadDays} дней.");
-        }
-        else
-        {
-            Logger.Flush();
-            return 0;
-        }
+            string serverPath = _config["RemoteHistory"] ?? "/UpdateHistory.txt";
+            string localPath = _config["LocalHistory"] ?? "UpdateHistory.txt";
 
-        var dateFrom = DateTime.Now.AddDays(-DownloadDays).ToString("yyyyMMdd");
-        int counter = 0;
+            long serverSize = await GetFileSizeAsync(serverPath);
 
-        foreach (var item in list)
-        {
-            // "/EQ/20230526/PC01101_EQMLIST_001_260523_025153489.xml.p7s.zip.p7e"
-            // Допстраховка от сбоев, когда возникает желание перезагрузить весь список от начала...
-            if (item[3] != '/' || string.Compare(item, 4, dateFrom, 0, 8) < 0)
+            var history = new FileInfo(localPath);
+
+            if (history.Exists)
             {
-                continue;
-            }
+                long localSize = history.Length;
 
-            string file = Path.Combine(DownloadDirectory, Path.GetFileName(item));
-            bool ok = false;
-
-            for (int i = 0; i <= retries; i++)
-            {
-                if (await DownloadFileAsync(item, file)) //overwrite, no resume
+                if (serverSize == localSize)
                 {
-                    ok = true;
-                    counter++;
-                    break;
+                    return 0;
                 }
 
-                Thread.Sleep(timeout);
-                Logger.TimeLine($"Попытка повторить {i + 1}/{retries}...");
+                if (serverSize > localSize)
+                {
+                    using var stream = new MemoryStream((int)(serverSize - localSize));
+                    await DownloadStreamAsync(serverPath, stream, localSize);
+
+                    using var fileStream = new FileStream(localPath, FileMode.Append, FileAccess.Write);
+                    using var writer = new StreamWriter(fileStream);
+
+                    stream.Position = 0;
+                    using var reader = new StreamReader(stream, Encoding.ASCII);
+
+                    while (!reader.EndOfStream)
+                    {
+                        var item = reader.ReadLine()!;
+                        var path = Path.Combine(DownloadDirectory, Path.GetFileName(item));
+                        await DownloadFileAsync(item, path);
+
+                        if (!File.Exists(path))
+                        {
+                            throw new Exception("Файл не загружен.");
+                        }
+
+                        _count++;
+                        writer.WriteLine(item);
+                        //TODO writer.Write(item + "\r\n"); //not Windows
+                    }
+
+                    return 0;
+                }
+
+                File.Delete(localPath);
             }
 
-            if (!ok)
+            Logger.TimeLine($"Перезагрузка за последние {DownloadDays} дней.");
+            var dateFrom = DateTime.Now.AddDays(-DownloadDays).ToString("yyyyMMdd");
+
             {
-                Logger.TimeLine($"Не удалось загрузить {item}");
+                using var stream = new MemoryStream((int)serverSize);
+                await DownloadStreamAsync(serverPath, stream, 0);
+
+                using var fileStream = new FileStream(localPath, FileMode.Create, FileAccess.Write);
+                using var writer = new StreamWriter(fileStream);
+
+                stream.Position = 0;
+                using var reader = new StreamReader(stream, Encoding.ASCII);
+
+                while (!reader.EndOfStream)
+                {
+                    var item = reader.ReadLine()!;
+
+                    // "/EQ/20230526/PC01101_EQMLIST_001_260523_025153489.xml.p7s.zip.p7e"
+                    // Допстраховка от сбоев, когда возникает желание перезагрузить весь список от начала...
+                    if (item.Length > 12
+                        && item[3] == '/'
+                        && string.Compare(item, 4, dateFrom, 0, 8) >= 0)
+                    {
+                        var path = Path.Combine(DownloadDirectory, Path.GetFileName(item));
+                        await DownloadFileAsync(item, path);
+
+                        if (!File.Exists(path))
+                        {
+                            throw new Exception("Файл не загружен.");
+                        }
+
+                        _count++;
+                    }
+
+                    writer.WriteLine(item);
+                    //TODO writer.Write(item + "\r\n"); //not Windows
+                }
             }
+
+            Logger.TimeLine($"Загружено {_count} файлов.");
+            return 0;
         }
-
-        Logger.TimeLine($"Загружено {counter} из {list.Length}.");
-        Logger.Flush();
-
-        return 0;
-    }
-
-    /// <summary>
-    /// Скачать файл истории выкладок, что на сервере, в файл на клиенте.
-    /// </summary>
-    /// <param name="serverPath">Путь к файлу истории на сервере.</param>
-    /// <param name="localPath">Путь к файлу истории на локальном диске.</param>
-    /// <returns>Массив строк с новыми файлами по сравнению с локальной копией файла истории.</returns>
-    private static async Task<string[]> GetDiffAsync(string serverPath, string localPath)
-    {
-        var lines = new List<string>();
-
-        try
+        catch (Exception e)
         {
-            using var stream = await GetFtpDataAsync(serverPath, localPath, true);
-            using var reader = new StreamReader(stream);
-
-            while (!reader.EndOfStream)
+            if (_count > 0)
             {
-                var line = await reader.ReadLineAsync();
-                if (line is null) break;
-                lines.Add(line);
+                Logger.TimeLine($"Загружено {_count} файлов.");
             }
 
-            return [.. lines];
+            Logger.TimeLine(e.Message);
+            return 1;
         }
-        catch (WebException e)
+        finally
         {
-            Logger.TimeLine("Download file Error: " + e.Message);
-            return [];
-        }
-    }
-
-    /// <summary>
-    /// Скачать файл с сервера.
-    /// </summary>
-    /// <param name="serverPath">Путь к файлу на сервере.</param>
-    /// <param name="localPath">Путь к файлу на локальном диске.</param>
-    /// <param name="resume">Использовать ли докачку.</param>
-    /// <returns>Выполнение завершено успешно (true/false).</returns>
-    private static async Task<bool> DownloadFileAsync(string serverPath, string localPath, bool resume = false)
-    {
-        try
-        {
-            var file = await SaveFtpDataAsync(serverPath, localPath, resume);
-
-            if (file.Exists && file.Length == 0)
-            {
-                Logger.TimeLine("Файл был скачан нулевой длины и будет удален - проверьте!");
-                file.Delete();
-                return false;
-            }
-
-            return file.Exists;
-        }
-        catch (WebException e)
-        {
-            var x = (FtpWebResponse?)e.Response;
-
-            if (x == null)
-            {
-                Logger.TimeLine("Ответ от сервера не получен.");
-                return false;
-            }
-
-            if (x.StatusCode == FtpStatusCode.ActionNotTakenFileUnavailable)
-            {
-                Logger.TimeLine("Файл был удален в связи с истечением срока давности.");
-                return true; // it's normal to skip it
-            }
-
-            Logger.TimeLine("Download file Error: " + e.Message);
-
-            var file = new FileInfo(localPath);
-
-            if (file.Exists)
-            {
-                file.Delete();
-            }
-
-            return false;
+            Logger.Flush();
         }
     }
 
-    /// <summary>
-    /// Сравнить размер файла на сервере и на диске.
-    /// </summary>
-    /// <param name="serverPath">Путь к файлу на сервере.</param>
-    /// <param name="localPath">Путь к файлу на локальном диске.</param>
-    /// <returns>0 - скачивать не надо (или нет связи);
-    /// 1 - надо докачать (размер вырос);
-    /// -1 - ошибка (надо скачать заново).</returns>
-    private static int CompareSizeOfFile(string serverPath, string localPath)
+    private static async Task<long> GetFileSizeAsync(string serverPath)
     {
-        var file = new FileInfo(localPath);
-
-        if (!file.Exists)
-        {
-            return -1;
-        }
-
-        try
-        {
-            long size = GetFtpSize(serverPath);
-            long localSize = file.Length;
-
-            return (size == localSize)
-                ? 0
-                : (size > localSize)
-                    ? 1
-                    : -1;
-        }
-        catch (WebException e)
-        {
-            var x = (FtpWebResponse?)e.Response;
-
-            if (x == null)
-            {
-                Logger.TimeLine("Ответ от сервера не получен.");
-                return 0;
-            }
-
-            if (x.StatusCode == FtpStatusCode.ActionNotTakenFileUnavailable)
-            {
-                Logger.TimeLine("Файл был удален в связи с истечением срока давности.");
-                return 0;
-            }
-
-            Logger.TimeLine("Size of file Error: " + e.Message);
-            return -1;
-        }
-    }
-
-    private static async Task<MemoryStream> GetFtpDataAsync(string serverPath, string localPath, bool resume = false)
-    {
-        var file = new FileInfo(localPath);
-        long position = (resume && file.Exists) ? file.Length : 0;
-
-        var stream = new MemoryStream();
-        using (var ftpStream = GetResponse(serverPath, WebRequestMethods.Ftp.DownloadFile, position).GetResponseStream())
-            await ftpStream.CopyToAsync(stream);
-
-        stream.Position = position;
-        var mode = position > 0 ? FileMode.Append : FileMode.Create;
-        using (var fileStream = new FileStream(localPath, mode))
-            await stream.CopyToAsync(fileStream);
-
-        stream.Position = position;
-        return stream;
-    }
-
-    private static async Task<FileInfo> SaveFtpDataAsync(string serverPath, string localPath, bool resume = false)
-    {
-        var file = new FileInfo(localPath);
-        long position = (resume && file.Exists) ? file.Length : 0;
-
-        var mode = position > 0 ? FileMode.Append : FileMode.Create;
-        using (var fileStream = new FileStream(localPath, mode))
-        using (var ftpStream = GetResponse(serverPath, WebRequestMethods.Ftp.DownloadFile, position).GetResponseStream())
-            await ftpStream.CopyToAsync(fileStream);
-
-        return new FileInfo(localPath);
-    }
-
-    private static long GetFtpSize(string serverPath)
-    {
-        using var response = GetResponse(serverPath, WebRequestMethods.Ftp.GetFileSize);
+        using var response = await GetResponseAsync(serverPath, WebRequestMethods.Ftp.GetFileSize);
         return response.ContentLength;
     }
 
+    private static async Task DownloadStreamAsync(string serverPath, Stream stream, long contentOffset)
+    {
+        using var response = await GetResponseAsync(serverPath, WebRequestMethods.Ftp.DownloadFile, contentOffset);
+        using var responseStream = response.GetResponseStream();
+
+        await responseStream.CopyToAsync(stream);
+    }
+
+    private static async Task DownloadFileAsync(string serverPath, string localPath, long contentOffset = 0)
+    {
+        var mode = contentOffset == 0 ? FileMode.Create : FileMode.Append;
+        using var fileStream = new FileStream(localPath, mode, FileAccess.Write);
+
+        await DownloadStreamAsync(serverPath, fileStream, contentOffset);
+    }
+
     /// <summary>
-    /// Получить бинарное содержимое указанного файла.
+    /// Получить бинарное содержимое указанного файла.IZE
     /// </summary>
     /// <param name="serverPath">Путь к файлу на сервере.</param>
     /// <param name="method">Метод получения (FTP, загрузить файл).</param>
     /// <param name="contentOffset">Место смещения в файле (не 0 при докачивании).</param>
     /// <returns>Возвращает ответ FTP-сервера.</returns>
-    private static FtpWebResponse GetResponse(string serverPath, string method = WebRequestMethods.Ftp.DownloadFile, long contentOffset = 0)
+    private static async Task<FtpWebResponse> GetResponseAsync(string serverPath, string method = WebRequestMethods.Ftp.DownloadFile, long contentOffset = 0)
     {
+        const int retries = 5;
+        const int timeout = 3;
+
 #pragma warning disable SYSLIB0014 // Тип или член устарел (WebRequest.Create да, но не FtpWebRequest!)
         var request = (FtpWebRequest)WebRequest.Create(TargetName + serverPath); //TODO replace obsolete
 #pragma warning restore SYSLIB0014 // Тип или член устарел
 
-        request.Proxy = null; // Игнорировать настройки прокси (TODO: сделать поддержку прокси).
+        //request.Proxy = new WebProxy("http://proxy.com:3128");
+        request.Proxy = null;
         request.Credentials = User;
         request.Method = method;
         request.EnableSsl = true;
-        request.UseBinary = true;
-        request.ContentLength = contentOffset;
+        request.ContentOffset = contentOffset;
 
         Logger.TimeLine(contentOffset > 0
             ? $"< {method} {serverPath} {contentOffset}"
             : $"< {method} {serverPath}");
 
-        var response = (FtpWebResponse)request.GetResponse();
+        string error = "Ошибка FTP.";
 
-        if (response.StatusCode != FtpStatusCode.DataAlreadyOpen && response.StatusCode != FtpStatusCode.OpeningData)
+        for (int retry = 1; retry <= retries; retry++)
         {
-            // StatusDescription tails an extra NewLine!
-            string line = (response.StatusDescription ?? "").Replace("\r\n", ""); //TODO better
+            try
+            {
+                var response = (FtpWebResponse)request.GetResponse();
 
-            Logger.TimeLine($"> {line}");
+                if (response.StatusCode != FtpStatusCode.DataAlreadyOpen && response.StatusCode != FtpStatusCode.OpeningData)
+                {
+                    // StatusDescription tails an extra NewLine!
+                    string line = (response.StatusDescription ?? "").Replace("\r\n", ""); //TODO better
+
+                    Logger.TimeLine($"> {line}");
+                }
+
+                return response;
+            }
+            catch (WebException e)
+            {
+                var x = (FtpWebResponse?)e.Response;
+
+                if (x is null)
+                {
+                    error = "Ответ сервера не получен.";
+                }
+                else
+                {
+                    error = $"> {x.StatusDescription}";
+
+                    if ((int)x.StatusCode > 499)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                error = e.Message;
+                break;
+            }
+
+            Logger.TimeLine(error);
+            var delay = TimeSpan.FromSeconds(Math.Pow(timeout, retry));
+            Logger.TimeLine($"Повтор {retry}/{retries} через {delay.Seconds} сек...");
+
+            await Task.Delay(delay);
         }
 
-        return response;
+        throw new Exception(error);
     }
 }

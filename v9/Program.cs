@@ -25,13 +25,13 @@ internal class Program
 {
     static async Task<int> Main(string[] args)
     {
-        Console.WriteLine(App.Version);
+        Console.WriteLine(App.Title);
 
         if (args.Length > 0) // Usage
         {
             Console.WriteLine(App.Description);
-            Console.WriteLine("Use config file.");
-            return 1;
+            Console.WriteLine("Use config JSON file.");
+            return 2;
         }
 
         try

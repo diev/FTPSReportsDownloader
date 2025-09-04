@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Authors>Diev</Authors>
-    <Version>9.2025.902</Version>
+    <Version>9.2025.903</Version>
     <Description>Downloads all reports from a remote MOEX FTPS server to a local path.</Description>
     <Copyright>Copyright © MOEX 2016, 2022-2025 Dmitrii Evdokimov</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>

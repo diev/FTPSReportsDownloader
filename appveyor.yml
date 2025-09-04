@@ -9,13 +9,10 @@ branches:
 skip_tags: true
 skip_branch_with_pr: true
 max_jobs: 1
-
 configuration: Release
-
 init:
 - cmd: >-
     tzutil /s "Russian Standard Time"
-
     git config --global core.autocrlf input
 dotnet_csproj:
   patch: true
@@ -28,11 +25,14 @@ dotnet_csproj:
   informational_version: '{version}'
 install:
 - ps: >-
-    $CommitDateTime = [datetime]::Parse($env:APPVEYOR_REPO_COMMIT_TIMESTAMP)
-
-    $env:BuildDate = $CommitDateTime.ToString('yyyy-MM-dd')
-
-    Update-AppveyorBuild -Version "$env:BuildDate.$env:APPVEYOR_BUILD_NUMBER"
+    $prj = v9\FTPSReportsDownloader.csproj
+    $commitDateTime = [datetime]::Parse($env:APPVEYOR_REPO_COMMIT_TIMESTAMP)
+    $env:BuildDate = $commitDateTime.ToString('yyyy-MM-dd')
+    $xml = [Xml] (Get-Content $prj)
+    $ver = [Version] ($xml.Project.PropertyGroup | ? {$_.Version}).Version
+    $env:Version = ($ver.Substring(0, $ver.LastIndexOf(".") + 1)) + $env:APPVEYOR_BUILD_NUMBER
+    Update-AppveyorBuild -Version "$env:Version"
+    Write-Host "Building v$env:APPVEYOR_BUILD_VERSION"
 build_script:
 - cmd: build.cmd
 artifacts:
